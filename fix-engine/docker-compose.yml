@@ -1,0 +1,137 @@
+version: '3.9'
+
+services:
+
+  # ── PostgreSQL ────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:15-alpine
+    container_name: fix-postgres
+    environment:
+      POSTGRES_DB: fixengine
+      POSTGRES_USER: fixuser
+      POSTGRES_PASSWORD: fixpass
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fixuser -d fixengine"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── ZooKeeper ─────────────────────────────────────────────────────────────
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.0
+    container_name: fix-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+
+  # ── FIX Engine Node 1 (Leader candidate) ─────────────────────────────────
+  fix-node-1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: fix-node-1
+    environment:
+      NODE_ID: node-1
+      NODE_HOST: fix-node-1
+      SERVER_PORT: 8080
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: fixengine
+      DB_USER: fixuser
+      DB_PASS: fixpass
+      ZK_CONNECT: zookeeper:2181
+      HZ_NODE1: fix-node-1
+      HZ_NODE2: fix-node-2
+      HZ_NODE3: fix-node-3
+      JWT_SECRET: dev-secret-change-in-production-256bit
+    ports:
+      - "8081:8080"
+      - "9876:9876"   # FIX acceptor port
+    depends_on:
+      postgres:
+        condition: service_healthy
+      zookeeper:
+        condition: service_started
+    volumes:
+      - ./logs/node-1:/opt/fix-engine/logs
+
+  # ── FIX Engine Node 2 ─────────────────────────────────────────────────────
+  fix-node-2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: fix-node-2
+    environment:
+      NODE_ID: node-2
+      NODE_HOST: fix-node-2
+      SERVER_PORT: 8080
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: fixengine
+      DB_USER: fixuser
+      DB_PASS: fixpass
+      ZK_CONNECT: zookeeper:2181
+      HZ_NODE1: fix-node-1
+      HZ_NODE2: fix-node-2
+      HZ_NODE3: fix-node-3
+      JWT_SECRET: dev-secret-change-in-production-256bit
+    ports:
+      - "8082:8080"
+    depends_on:
+      - postgres
+      - zookeeper
+      - fix-node-1
+    volumes:
+      - ./logs/node-2:/opt/fix-engine/logs
+
+  # ── FIX Engine Node 3 ─────────────────────────────────────────────────────
+  fix-node-3:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: fix-node-3
+    environment:
+      NODE_ID: node-3
+      NODE_HOST: fix-node-3
+      SERVER_PORT: 8080
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: fixengine
+      DB_USER: fixuser
+      DB_PASS: fixpass
+      ZK_CONNECT: zookeeper:2181
+      HZ_NODE1: fix-node-1
+      HZ_NODE2: fix-node-2
+      HZ_NODE3: fix-node-3
+      JWT_SECRET: dev-secret-change-in-production-256bit
+    ports:
+      - "8083:8080"
+    depends_on:
+      - postgres
+      - zookeeper
+      - fix-node-1
+    volumes:
+      - ./logs/node-3:/opt/fix-engine/logs
+
+  # ── HAProxy Load Balancer ─────────────────────────────────────────────────
+  haproxy:
+    image: haproxy:2.9-alpine
+    container_name: fix-haproxy
+    ports:
+      - "80:80"
+      - "8404:8404"
+    volumes:
+      - ./deploy/haproxy-dev.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    depends_on:
+      - fix-node-1
+      - fix-node-2
+      - fix-node-3
+
+volumes:
+  postgres-data:
